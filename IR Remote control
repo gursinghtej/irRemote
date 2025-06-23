@@ -1,0 +1,78 @@
+#include <IRremote.h>
+
+#define IR_RECEIVE_PIN 15
+#define LED_PIN 2
+
+IRrecv irrecv(IR_RECEIVE_PIN);
+decode_results results;
+
+int blinkRate = 0;  // 0 = OFF, 1..9 = blinks per second
+unsigned long lastBlink = 0;
+bool ledState = false;
+bool solidOn = false;  // Track solid ON/OFF state (not blinking)
+
+// Replace these with the IR codes from your remote
+#define CODE_ON_OFF  0xED127F80  // example: power button
+#define CODE_1       0xF50A7F80  
+#define CODE_2       0xE41B7F80
+#define CODE_3       0xE01F7F80
+#define CODE_4       0xF30C7F80
+#define CODE_5       0xF20D7F80
+#define CODE_6       0xF10E7F80
+#define CODE_7       0xFF007F80
+#define CODE_8       0xF00F7F80
+#define CODE_9       0xE6197F80
+
+void setup() {
+  Serial.begin(115200);
+  IrReceiver.begin(IR_RECEIVE_PIN, ENABLE_LED_FEEDBACK);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  Serial.println("IR Receiver ready, waiting for input...");
+}
+
+void loop() {
+  // Handle IR input
+  if (IrReceiver.decode()) {
+    uint32_t code = IrReceiver.decodedIRData.decodedRawData;
+    Serial.print("IR Code received: ");
+    Serial.println(code, HEX);
+
+    // Match code
+    switch (code) {
+      case CODE_ON_OFF:
+        if (blinkRate == 0 && solidOn) {
+          // If solid ON, turn off
+          digitalWrite(LED_PIN, LOW);
+          solidOn = false;
+        } else {
+          // If off or blinking, turn on solid
+          blinkRate = 0;
+          digitalWrite(LED_PIN, HIGH);
+          solidOn = true;
+        }
+        break;
+      case CODE_1: blinkRate = 1; solidOn = false; break;
+      case CODE_2: blinkRate = 2; solidOn = false; break;
+      case CODE_3: blinkRate = 3; solidOn = false; break;
+      case CODE_4: blinkRate = 4; solidOn = false; break;
+      case CODE_5: blinkRate = 5; solidOn = false; break;
+      case CODE_6: blinkRate = 6; solidOn = false; break;
+      case CODE_7: blinkRate = 7; solidOn = false; break;
+      case CODE_8: blinkRate = 8; solidOn = false; break;
+      case CODE_9: blinkRate = 9; solidOn = false; break;
+    }
+
+    IrReceiver.resume();  // Ready for next code
+  }
+
+  // Handle LED blinking
+  if (blinkRate > 0) {
+    unsigned long interval = 1000 / (blinkRate * 2); // ON and OFF intervals
+    if (millis() - lastBlink >= interval) {
+      lastBlink = millis();
+      ledState = !ledState;
+      digitalWrite(LED_PIN, ledState);
+    }
+  }
+}
