@@ -6,29 +6,63 @@
 IRrecv irrecv(IR_RECEIVE_PIN);
 decode_results results;
 
-int blinkRate = 0;  // 0 = OFF, 1..9 = blinks per second
+int blinkRate = 0; // 0 = OFF, 1..9 = blinks per second
 unsigned long lastBlink = 0;
 bool ledState = false;
-bool solidOn = false;  // Track solid ON/OFF state (not blinking)
+bool solidOn = false; // Track solid ON/OFF state (not blinking)
 
-// Replace these with the IR codes from your remote
-#define CODE_ON_OFF  0xED127F80  // example: power button
-#define CODE_1       0xF50A7F80  
-#define CODE_2       0xE41B7F80
-#define CODE_3       0xE01F7F80
-#define CODE_4       0xF30C7F80
-#define CODE_5       0xF20D7F80
-#define CODE_6       0xF10E7F80
-#define CODE_7       0xFF007F80
-#define CODE_8       0xF00F7F80
-#define CODE_9       0xE6197F80
+// PWM variables
+int pwmFrequency = 1000; // PWM frequency in Hz (default 1kHz)
+int dutyCycle = 128; // PWM duty cycle 0-255 (default ~50%)
+int pwmChannel = 0; // PWM channel for ESP32
+bool pwmMode = false; // Track if we're in PWM mode
+
+// IR codes for basic functions
+#define CODE_ON_OFF 0xED127F80 // power button
+#define CODE_1 0xF50A7F80
+#define CODE_2 0xE41B7F80
+#define CODE_3 0xE01F7F80
+#define CODE_4 0xF30C7F80
+#define CODE_5 0xF20D7F80
+#define CODE_6 0xF10E7F80
+#define CODE_7 0xFF007F80
+#define CODE_8 0xF00F7F80
+#define CODE_9 0xE6197F80
+
+// New IR codes for PWM control
+#define CODE_FREQ_DECREASE 0xFA057F80 // frequency decrease
+#define CODE_FREQ_INCREASE 0xF9067F80 // frequency increase
+#define CODE_DUTY_DECREASE 0xFD027F80 // duty decrease
+#define CODE_DUTY_INCREASE 0xFC037F80 // duty increase
 
 void setup() {
   Serial.begin(115200);
   IrReceiver.begin(IR_RECEIVE_PIN, ENABLE_LED_FEEDBACK);
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
+  
+  // Configure PWM channel (ESP32)
+  ledcSetup(pwmChannel, pwmFrequency, 8); // 8-bit resolution
+  ledcAttachPin(LED_PIN, pwmChannel);
+  
   Serial.println("IR Receiver ready, waiting for input...");
+  Serial.println("PWM Mode: Frequency control and duty cycle control available");
+  Serial.print("Initial PWM Frequency: ");
+  Serial.print(pwmFrequency);
+  Serial.println(" Hz");
+  Serial.print("Initial Duty Cycle: ");
+  Serial.print((dutyCycle * 100) / 255);
+  Serial.println("%");
+}
+
+void updatePWM() {
+  ledcSetup(pwmChannel, pwmFrequency, 8);
+  ledcWrite(pwmChannel, dutyCycle);
+  Serial.print("PWM Updated - Frequency: ");
+  Serial.print(pwmFrequency);
+  Serial.print(" Hz, Duty Cycle: ");
+  Serial.print((dutyCycle * 100) / 255);
+  Serial.println("%");
 }
 
 void loop() {
@@ -41,33 +75,125 @@ void loop() {
     // Match code
     switch (code) {
       case CODE_ON_OFF:
-        if (blinkRate == 0 && solidOn) {
-          // If solid ON, turn off
+        if (blinkRate == 0 && (solidOn || pwmMode)) {
+          // Turn off completely
           digitalWrite(LED_PIN, LOW);
+          ledcWrite(pwmChannel, 0);
           solidOn = false;
+          pwmMode = false;
+          Serial.println("LED OFF");
         } else {
-          // If off or blinking, turn on solid
+          // Turn on solid (exit PWM and blink modes)
           blinkRate = 0;
+          pwmMode = false;
           digitalWrite(LED_PIN, HIGH);
           solidOn = true;
+          Serial.println("LED ON (Solid)");
         }
         break;
-      case CODE_1: blinkRate = 1; solidOn = false; break;
-      case CODE_2: blinkRate = 2; solidOn = false; break;
-      case CODE_3: blinkRate = 3; solidOn = false; break;
-      case CODE_4: blinkRate = 4; solidOn = false; break;
-      case CODE_5: blinkRate = 5; solidOn = false; break;
-      case CODE_6: blinkRate = 6; solidOn = false; break;
-      case CODE_7: blinkRate = 7; solidOn = false; break;
-      case CODE_8: blinkRate = 8; solidOn = false; break;
-      case CODE_9: blinkRate = 9; solidOn = false; break;
+
+      case CODE_1:
+        blinkRate = 1;
+        solidOn = false;
+        pwmMode = false;
+        Serial.println("Blink rate: 1 Hz");
+        break;
+      case CODE_2:
+        blinkRate = 2;
+        solidOn = false;
+        pwmMode = false;
+        Serial.println("Blink rate: 2 Hz");
+        break;
+      case CODE_3:
+        blinkRate = 3;
+        solidOn = false;
+        pwmMode = false;
+        Serial.println("Blink rate: 3 Hz");
+        break;
+      case CODE_4:
+        blinkRate = 4;
+        solidOn = false;
+        pwmMode = false;
+        Serial.println("Blink rate: 4 Hz");
+        break;
+      case CODE_5:
+        blinkRate = 5;
+        solidOn = false;
+        pwmMode = false;
+        Serial.println("Blink rate: 5 Hz");
+        break;
+      case CODE_6:
+        blinkRate = 6;
+        solidOn = false;
+        pwmMode = false;
+        Serial.println("Blink rate: 6 Hz");
+        break;
+      case CODE_7:
+        blinkRate = 7;
+        solidOn = false;
+        pwmMode = false;
+        Serial.println("Blink rate: 7 Hz");
+        break;
+      case CODE_8:
+        blinkRate = 8;
+        solidOn = false;
+        pwmMode = false;
+        Serial.println("Blink rate: 8 Hz");
+        break;
+      case CODE_9:
+        blinkRate = 9;
+        solidOn = false;
+        pwmMode = false;
+        Serial.println("Blink rate: 9 Hz");
+        break;
+
+      // PWM Control cases
+      case CODE_FREQ_DECREASE:
+        pwmFrequency -= 100;
+        if (pwmFrequency < 100) pwmFrequency = 100; // Minimum 100Hz
+        blinkRate = 0;
+        solidOn = false;
+        pwmMode = true;
+        updatePWM();
+        break;
+
+      case CODE_FREQ_INCREASE:
+        pwmFrequency += 100;
+        if (pwmFrequency > 10000) pwmFrequency = 10000; // Maximum 10kHz
+        blinkRate = 0;
+        solidOn = false;
+        pwmMode = true;
+        updatePWM();
+        break;
+
+      case CODE_DUTY_DECREASE:
+        dutyCycle -= 15;
+        if (dutyCycle < 0) dutyCycle = 0; // Minimum 0%
+        blinkRate = 0;
+        solidOn = false;
+        pwmMode = true;
+        updatePWM();
+        break;
+
+      case CODE_DUTY_INCREASE:
+        dutyCycle += 15;
+        if (dutyCycle > 255) dutyCycle = 255; // Maximum 100%
+        blinkRate = 0;
+        solidOn = false;
+        pwmMode = true;
+        updatePWM();
+        break;
+
+      default:
+        Serial.println("Unknown code");
+        break;
     }
 
-    IrReceiver.resume();  // Ready for next code
+    IrReceiver.resume(); // Ready for next code
   }
 
-  // Handle LED blinking
-  if (blinkRate > 0) {
+  // Handle LED blinking (only if not in PWM mode and not solid on)
+  if (blinkRate > 0 && !pwmMode) {
     unsigned long interval = 1000 / (blinkRate * 2); // ON and OFF intervals
     if (millis() - lastBlink >= interval) {
       lastBlink = millis();
