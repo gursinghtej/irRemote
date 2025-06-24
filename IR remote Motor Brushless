@@ -1,0 +1,297 @@
+/*
+ * ESP32 Brushless Motor Controller
+ * Controls A2212/10T motor via 30A ESC
+ * 
+ * Hardware Setup:
+ * - ESP32 GPIO pin to ESC signal wire
+ * - ESC connected to motor (3 wires)
+ * - ESC powered by LiPo battery (red/black wires)
+ * - ESC BEC can power ESP32 (optional)
+ * 
+ * ESC PWM Signal:
+ * - 50Hz frequency (20ms period)
+ * - 1000-2000μs pulse width
+ * - 1000μs = minimum throttle (stop)
+ * - 1500μs = mid throttle
+ * - 2000μs = maximum throttle
+ */
+
+#include <IRremote.h>
+
+// Pin definitions
+#define IR_RECEIVE_PIN 15    // IR receiver pin
+#define ESC_PIN 2           // ESC signal pin (can use any GPIO pin)
+#define LED_PIN 4           // Status LED pin
+
+// ESC PWM parameters
+#define ESC_FREQUENCY 50    // 50Hz for ESC
+#define ESC_RESOLUTION 16   // 16-bit resolution for precise control
+#define ESC_CHANNEL 0       // PWM channel
+
+// Pulse width values (in microseconds)
+#define ESC_MIN_PULSE 1000  // Minimum throttle (motor stop)
+#define ESC_MAX_PULSE 2000  // Maximum throttle (full speed)
+#define ESC_ARM_PULSE 1000  // Arming pulse (same as minimum)
+
+// Motor control variables
+int motorSpeed = 0;         // Motor speed (0-100%)
+bool motorArmed = false;    // ESC arming status
+bool motorRunning = false;  // Motor running status
+unsigned long lastCommand = 0;
+unsigned long armingStartTime = 0;
+bool armingInProgress = false;
+
+// IR receiver
+IRrecv irrecv(IR_RECEIVE_PIN);
+decode_results results;
+
+// IR codes (replace with your remote codes)
+#define CODE_POWER     0xED127F80  // Arm/Disarm motor
+#define CODE_STOP      0xF50A7F80  // Emergency stop (code 1)
+#define CODE_SPEED_10  0xE41B7F80  // 10% speed (code 2)
+#define CODE_SPEED_20  0xE01F7F80  // 20% speed (code 3)
+#define CODE_SPEED_30  0xF30C7F80  // 30% speed (code 4)
+#define CODE_SPEED_40  0xF20D7F80  // 40% speed (code 5)
+#define CODE_SPEED_50  0xF10E7F80  // 50% speed (code 6)
+#define CODE_SPEED_60  0xFF007F80  // 60% speed (code 7)
+#define CODE_SPEED_70  0xF00F7F80  // 70% speed (code 8)
+#define CODE_SPEED_80  0xE6197F80  // 80% speed (code 9)
+#define CODE_SPEED_UP  0xF9067F80  // Speed increase
+#define CODE_SPEED_DOWN 0xFA057F80 // Speed decrease
+
+void setup() {
+  Serial.begin(115200);
+  
+  // Initialize pins
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(ESC_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  
+  // Setup PWM for ESC
+  setupESC();
+  
+  // Initialize IR receiver
+  IrReceiver.begin(IR_RECEIVE_PIN, ENABLE_LED_FEEDBACK);
+  
+  Serial.println("=== ESP32 Brushless Motor Controller ===");
+  Serial.println("Hardware: A2212/10T Motor + 30A ESC + 2200mAh LiPo");
+  Serial.println("");
+  Serial.println("SAFETY NOTICE:");
+  Serial.println("- Ensure propeller is removed during testing");
+  Serial.println("- Check all connections before powering on");
+  Serial.println("- Keep hands away from motor during operation");
+  Serial.println("");
+  Serial.println("Commands:");
+  Serial.println("Power button: Arm/Disarm ESC");
+  Serial.println("1: Emergency Stop");
+  Serial.println("2-9: Set speed 10%-80%");
+  Serial.println("Freq+/-: Speed increase/decrease");
+  Serial.println("");
+  Serial.println("Status: DISARMED - Press power to arm ESC");
+}
+
+void setupESC() {
+  // Configure PWM channel
+  #if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
+    // New ESP32 core 3.x API
+    ledcAttach(ESC_PIN, ESC_FREQUENCY, ESC_RESOLUTION);
+  #else
+    // Old ESP32 core 2.x API
+    ledcSetup(ESC_CHANNEL, ESC_FREQUENCY, ESC_RESOLUTION);
+    ledcAttachPin(ESC_PIN, ESC_CHANNEL);
+  #endif
+  
+  // Start with minimum pulse (safe state)
+  writeESC(ESC_MIN_PULSE);
+}
+
+void writeESC(int pulseWidth) {
+  // Convert microseconds to duty cycle value
+  // For 50Hz: 20ms period = 20000μs
+  // Duty cycle = (pulseWidth / 20000) * (2^resolution - 1)
+  int dutyCycle = (pulseWidth * ((1 << ESC_RESOLUTION) - 1)) / 20000;
+  
+  #if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
+    ledcWrite(ESC_PIN, dutyCycle);
+  #else
+    ledcWrite(ESC_CHANNEL, dutyCycle);
+  #endif
+}
+
+void setMotorSpeed(int speed) {
+  if (!motorArmed) {
+    Serial.println("ERROR: ESC not armed! Press power button first.");
+    return;
+  }
+  
+  // Constrain speed to 0-100%
+  speed = constrain(speed, 0, 100);
+  motorSpeed = speed;
+  
+  // Convert speed percentage to pulse width
+  int pulseWidth = map(speed, 0, 100, ESC_MIN_PULSE, ESC_MAX_PULSE);
+  writeESC(pulseWidth);
+  
+  motorRunning = (speed > 0);
+  
+  Serial.print("Motor Speed: ");
+  Serial.print(speed);
+  Serial.print("% (");
+  Serial.print(pulseWidth);
+  Serial.println("μs)");
+  
+  // Update status LED
+  digitalWrite(LED_PIN, motorRunning ? HIGH : LOW);
+}
+
+void armESC() {
+  if (motorArmed) {
+    Serial.println("ESC already armed!");
+    return;
+  }
+  
+  Serial.println("Arming ESC...");
+  Serial.println("Wait for ESC beep sequence...");
+  
+  armingInProgress = true;
+  armingStartTime = millis();
+  
+  // Send arming sequence
+  writeESC(ESC_ARM_PULSE);
+  
+  // Visual feedback
+  for (int i = 0; i < 5; i++) {
+    digitalWrite(LED_PIN, HIGH);
+    delay(100);
+    digitalWrite(LED_PIN, LOW);
+    delay(100);
+  }
+  
+  motorArmed = true;
+  armingInProgress = false;
+  
+  Serial.println("ESC ARMED - Ready for commands");
+  Serial.println("Current speed: 0% (stopped)");
+}
+
+void disarmESC() {
+  if (!motorArmed) {
+    Serial.println("ESC already disarmed!");
+    return;
+  }
+  
+  Serial.println("Disarming ESC...");
+  
+  // Stop motor first
+  setMotorSpeed(0);
+  delay(100);
+  
+  // Send minimum pulse
+  writeESC(ESC_MIN_PULSE);
+  
+  motorArmed = false;
+  motorRunning = false;
+  motorSpeed = 0;
+  
+  digitalWrite(LED_PIN, LOW);
+  
+  Serial.println("ESC DISARMED - Motor stopped");
+}
+
+void emergencyStop() {
+  Serial.println("!!! EMERGENCY STOP !!!");
+  setMotorSpeed(0);
+  digitalWrite(LED_PIN, LOW);
+}
+
+void loop() {
+  // Handle IR commands
+  if (IrReceiver.decode()) {
+    uint32_t code = IrReceiver.decodedIRData.decodedRawData;
+    
+    Serial.print("IR Code: 0x");
+    Serial.println(code, HEX);
+    
+    switch (code) {
+      case CODE_POWER:
+        if (motorArmed) {
+          disarmESC();
+        } else {
+          armESC();
+        }
+        break;
+        
+      case CODE_STOP:
+        emergencyStop();
+        break;
+        
+      case CODE_SPEED_10:
+        setMotorSpeed(10);
+        break;
+        
+      case CODE_SPEED_20:
+        setMotorSpeed(20);
+        break;
+        
+      case CODE_SPEED_30:
+        setMotorSpeed(30);
+        break;
+        
+      case CODE_SPEED_40:
+        setMotorSpeed(40);
+        break;
+        
+      case CODE_SPEED_50:
+        setMotorSpeed(50);
+        break;
+        
+      case CODE_SPEED_60:
+        setMotorSpeed(60);
+        break;
+        
+      case CODE_SPEED_70:
+        setMotorSpeed(70);
+        break;
+        
+      case CODE_SPEED_80:
+        setMotorSpeed(80);
+        break;
+        
+      case CODE_SPEED_UP:
+        if (motorArmed) {
+          int newSpeed = constrain(motorSpeed + 5, 0, 100);
+          setMotorSpeed(newSpeed);
+        }
+        break;
+        
+      case CODE_SPEED_DOWN:
+        if (motorArmed) {
+          int newSpeed = constrain(motorSpeed - 5, 0, 100);
+          setMotorSpeed(newSpeed);
+        }
+        break;
+        
+      default:
+        Serial.println("Unknown command");
+        break;
+    }
+    
+    lastCommand = millis();
+    IrReceiver.resume();
+  }
+  
+  // Safety timeout - stop motor if no command for 10 seconds
+  if (motorRunning && (millis() - lastCommand > 10000)) {
+    Serial.println("Safety timeout - stopping motor");
+    emergencyStop();
+  }
+  
+  // Status blink when armed but stopped
+  if (motorArmed && !motorRunning) {
+    static unsigned long lastBlink = 0;
+    if (millis() - lastBlink > 1000) {
+      digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+      lastBlink = millis();
+    }
+  }
+}
